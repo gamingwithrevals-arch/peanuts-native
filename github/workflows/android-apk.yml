@@ -1,0 +1,48 @@
+name: android-apk
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install the NDK and CMake the app needs
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Build the APK (no game data: simulated packer)
+        working-directory: android/app
+        run: |
+          chmod +x gradlew
+          ./gradlew -PnxApp=peanuts -PnxPackEngine=fake apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: peanuts-apk
+          path: android/app/out/*.apk
+          if-no-files-found: error
