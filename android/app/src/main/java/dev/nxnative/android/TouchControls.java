@@ -726,4 +726,4 @@ final class TouchControls extends View {
     static boolean showLog(Context c) { return Prefs.open(c, "touch_controls").getBoolean("log", false); }
 
     private void save() { prefs().edit().putFloat("opacity", opacity).putFloat("scale", scale).putBoolean("haptics", haptics).commit(); }
-                     }
+}
