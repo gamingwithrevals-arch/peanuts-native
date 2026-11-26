@@ -65,6 +65,9 @@ final class TouchControls extends View {
     private String prof;
     private final float[] gdx = new float[GROUPS], gdy = new float[GROUPS], gsc = new float[GROUPS];
     private float placeX = 0.5f, placeY = 0.5f;
+    // PEANUTS: per-game controls layout (Controls layout: This game only)
+    private String game;      // the title ID of the game this layout is for (its intent's title_id); null outside a game (the launcher's self-test)
+    private boolean perGame;  // this game keeps its own layout (game_layout@<title ID>), not the one every game shares
     private boolean stretch;   // the replay stretches the picture over the whole view (DM_VK_STRETCH)
     private int pictureSize = PictureFit.SIZE_MAX;   // the picture's share of its fitted or stretched size (DM_VK_PICTURE_SIZE), %
     /** Stretch to screen and the picture size (GameActivity: from the game's environment at start, and the in-game panel's Picture rows while it runs, which send the
@@ -289,21 +292,61 @@ final class TouchControls extends View {
         return placeX != 0.5f || placeY != defY();
     }
 
+    // PEANUTS: per-game controls layout (see gameLayout)
+    /** The title ID of the game this view is in (its activity's title_id extra), or null outside a game */
+    private String gameId() {
+        Context c = getContext();
+        if (!(c instanceof android.app.Activity)) return null;
+        android.content.Intent in = ((android.app.Activity) c).getIntent();
+        String id = in == null ? null : in.getStringExtra("title_id");
+        return id == null || id.isEmpty() ? null : id;
+    }
+
+    /** Whether a game keeps its own controls layout (Controls layout: This game only) instead of the one every game shares */
+    static boolean gameLayout(Context c, String titleId) { return titleId != null && Prefs.open(c, "touch_controls").getBoolean("game_layout@" + titleId, false); }
+    static void gameLayout(Context c, String titleId, boolean on) { Prefs.open(c, "touch_controls").edit().putBoolean("game_layout@" + titleId, on).commit(); }
+
+    /** The prefix of this game's own layout keys; "" for the shared layout */
+    private String scope() { return perGame ? "game:" + game + ":" : ""; }
+
+    /** A layout value: this game's own when it has one, else the shared one it starts from */
+    private String read(SharedPreferences p, String key, String dflt) {
+        String v = perGame ? p.getString(scope() + key, null) : null;
+        return v != null ? v : p.getString(key, dflt);
+    }
+
     private void load() {
         button = toggleButton(getContext());
+        game = gameId();
+        perGame = game != null && gameLayout(getContext(), game);
+        SharedPreferences p = prefs();
         for (int g = 0; g < GROUPS; g++) {
-            String[] v = prefs().getString("group" + g + "@" + prof, "0 0 1").split(" ");
+            String[] v = read(p, "group" + g + "@" + prof, "0 0 1").split(" ");
             try { gdx[g] = Float.parseFloat(v[0]); gdy[g] = Float.parseFloat(v[1]); gsc[g] = Float.parseFloat(v[2]); }
             catch (RuntimeException e) { gdx[g] = 0; gdy[g] = 0; gsc[g] = 1; }
         }
-        String[] v = prefs().getString("picture@" + prof, "0.5 " + defY()).split(" ");
+        String[] v = read(p, "picture@" + prof, "0.5 " + defY()).split(" ");
         try { placeX = Float.parseFloat(v[0]); placeY = Float.parseFloat(v[1]); } catch (RuntimeException e) { placeX = 0.5f; placeY = defY(); }
     }
 
+    // PEANUTS: per-game controls layout
+    /** Writes the layout to the current scope only: this game's keys, or the shared ones; another game's layout and the shared one are never touched by a game's edit */
     private void saveLayout() {
         SharedPreferences.Editor e = prefs().edit();
-        for (int g = 0; g < GROUPS; g++) e.putString("group" + g + "@" + prof, gdx[g] + " " + gdy[g] + " " + gsc[g]);
-        e.putString("picture@" + prof, placeX + " " + placeY).commit();   // commit: the game process may end right after (Stop)
+        String s = scope();
+        for (int g = 0; g < GROUPS; g++) e.putString(s + "group" + g + "@" + prof, gdx[g] + " " + gdy[g] + " " + gsc[g]);
+        e.putString(s + "picture@" + prof, placeX + " " + placeY).commit();   // commit: the game process may end right after (Stop)
+    }
+
+    /** Controls layout: this game only (true) or every game (false). A game's first own layout starts as the shared one. */
+    void setGameLayout(boolean own) {
+        String id = gameId();
+        if (id == null) return;
+        gameLayout(getContext(), id, own);
+        prof = null;   // reload: the next layout() reads the layout of the new scope
+        Native.note("on-screen controls layout: " + (own ? "this game only (" + id + ")" : "every game"));
+        layout(getWidth(), getHeight());
+        invalidate();
     }
 
     private void relayout() { layout(getWidth(), getHeight()); }
@@ -658,6 +701,21 @@ final class TouchControls extends View {
         reset.setText("Reset the controls");
         reset.setOnClickListener(v -> { os.setProgress(50); ss.setProgress(40); hb.setChecked(true); });   // 60 % opacity, 100 % size, the tick on
         box.addView(ol); box.addView(os); box.addView(sl); box.addView(ss); box.addView(hb); box.addView(lb); box.addView(tb); box.addView(reset);
+        // PEANUTS: per-game controls layout (the Controls layout rows)
+        String gid = gameId();
+        if (gid != null) {   // Controls layout: this game's own layout, or the one every game shares; the editor below edits whichever is chosen
+            TextView gl = new TextView(ctx);
+            gl.setText("Controls layout");
+            RadioGroup lg = new RadioGroup(ctx);
+            lg.setOrientation(RadioGroup.HORIZONTAL);
+            RadioButton all = new RadioButton(ctx), own = new RadioButton(ctx);
+            all.setId(4300); all.setText("Every game");
+            own.setId(4301); own.setText("This game only");
+            lg.addView(all); lg.addView(own);
+            lg.check(gameLayout(ctx, gid) ? 4301 : 4300);
+            lg.setOnCheckedChangeListener((rg, cid) -> setGameLayout(cid == 4301));
+            box.addView(gl); box.addView(lg);
+        }
         android.widget.Button ed = new android.widget.Button(ctx);   // the layout editor (runs onEditStart); the picture's position is in the panel's Picture rows (positionRows)
         ed.setText("Edit the controls layout…");
         ed.setOnClickListener(v -> startEditLayout());
@@ -668,4 +726,4 @@ final class TouchControls extends View {
     static boolean showLog(Context c) { return Prefs.open(c, "touch_controls").getBoolean("log", false); }
 
     private void save() { prefs().edit().putFloat("opacity", opacity).putFloat("scale", scale).putBoolean("haptics", haptics).commit(); }
-}
+                     }
